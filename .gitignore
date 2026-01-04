@@ -14,3 +14,13 @@ Thumbs.db
 *.o
 *.exe
 *.out
+
+
+# MATLAB 忽略清单
+*.asv
+*.autosave
+slprj/
+_mex/
+*.mexw64
+*.slxc
+*.mat  # 如果数据太大，建议也忽略，或者用 git lfs
