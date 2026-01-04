@@ -5,6 +5,10 @@
     "build": {
         "dockerfile": "Dockerfile"
     },
+    "containerEnv": {
+    "http_proxy": "http://host.docker.internal:7890", // Linux用户请换成具体IP
+    "https_proxy": "http://host.docker.internal:7890"
+    },
 
     // Features to add to the dev container. More info: https://containers.dev/features.
     // "features": {},
