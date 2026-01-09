@@ -9,6 +9,8 @@ add_executable(pendulum_sim
     src/main.cpp
     src/pendulum_dynamics.cpp
     src/logger.cpp
+    src/pendulum_ekf_model.cpp
+    src/ekf.cpp
 
 
 
@@ -24,6 +26,8 @@ add_executable(pendulum_sim
     include/rate_limiter.hpp
     include/cascade_pid.hpp
     include/observers.hpp
+    include/pendulum_ekf_model.hpp
+    include/ekf.hpp
 )
 
 

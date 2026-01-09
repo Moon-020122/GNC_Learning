@@ -12,6 +12,9 @@
 #include "pid.hpp"
 #include "cascade_pid.hpp"
 #include "observers.hpp"
+#include "pendulum_ekf_model.hpp"
+#include "ekf.hpp"
+#include "random"
 
 int main()
 {
@@ -20,15 +23,37 @@ int main()
     {
         const bool use_linear_plant = false;
         const bool use_observer = true;
-        const bool use_kalman = true;
         enum class ControlMode
         {
             Lqr,
             Pid,
             CascadePid
         };
-        const ControlMode control_mode = ControlMode::CascadePid;
+        enum class ObserversMode
+        {
+            Luen,
+            klam,
+            Exklam
+        };
+        const ControlMode control_mode = ControlMode::Lqr;
+        const ObserversMode observers_mode = ObserversMode::klam;
         LinearDiscreteModel lm;
+        // simulation settings
+        const double dt = 0.01;
+        const double t_end = 20;
+        const int steps = static_cast<int>(t_end / dt);
+
+        // initial condition
+        State x = State::Zero();
+        x(0) = 0.0; // x
+        x(1) = 0.0;
+        x(2) = deg2rad(5.0); // theta
+        x(3) = 0.0;
+
+        PendulumParams p; // using default setting
+        p.b_x = 0.2;
+        p.c_th = 0.5;
+
         lm.Ad << 1.0000, 0.0100, -0.0002, -0.0000,
             0, 1.0000, -0.0392, -0.0002,
             0, 0, 1.0014, 0.0100,
@@ -55,32 +80,33 @@ int main()
             0.1723, 3.7978;
 
         SteadyKalmanFilter kf;
-        kf.Kk << 0.2774, -0.0008,
-            0.2707, -0.0438,
-            -0.0008, 0.2856,
-            -0.0153, 0.5906;
+        kf.Kk << 0.9903, -0.0000,
+            0.9854, -0.0115,
+            -0.0000, 0.9903,
+            -0.0110, 1.1325;
 
-        PendulumParams p; // using default setting
-        p.b_x = 0.2;
-        p.c_th = 0.5;
-
-        // simulation settings
-        const double dt = 0.01;
-        const double t_end = 20;
-        const int steps = static_cast<int>(t_end / dt);
-
-        // initial condition
-        State x = State::Zero();
-        x(0) = 0.0; // x
-        x(1) = 0.0;
-        x(2) = deg2rad(8.0); // theta
-        x(3) = 0.0;
+        PendulumEkfModel ekf_model(p, dt);
+        EKF ekf(ekf_model);
+        Mat4 P0 = Mat4::Zero();
+        P0.diagonal() << 1e-4, 1e-1, 1e-4, 1e-1;
+        Mat4 Q = Mat4::Zero();
+        Q.diagonal() << 1e-8, 1e-6, 1e-8, 1e-6;
+        ekf.set_Q(Q);
+        Mat2 R = Mat2::Zero();
+        R.diagonal() << 1e-4, 1e-4;
+        ekf.set_R(R);
 
         State xhat0 = State::Zero();
         xhat0(0) = x(0);
         xhat0(2) = x(2);
         obs.reset(xhat0);
         kf.reset(xhat0);
+        ekf.reset(xhat0, P0);
+
+        // measurement noise generator
+        std::mt19937 rng(0);
+        std::normal_distribution<double> nx(0.0, std::sqrt(R(0, 0)));  // position
+        std::normal_distribution<double> nth(0.0, std::sqrt(R(1, 1))); // angle
 
         linplant.set_state(x);
         // Controller
@@ -88,7 +114,7 @@ int main()
         LQRController ctrl;
         ctrl.u_min = p.u_min;
         ctrl.u_max = p.u_max;
-        ctrl.K << -100.0000, -51.4701, -219.4251, -39.8832;
+        ctrl.K << -3.1623, -4.9645, -45.4799, -9.6556;
         ctrl.x_ref = State::Zero();
 
         PidGains g;
@@ -130,22 +156,38 @@ int main()
         {
             Meas y;
             y << x(0), x(2);
-            if (use_observer)
+            //  accompanied by noise
+            Meas z;
+            z(0) = x(0) + nx(rng);
+            z(1) = x(2) + nth(rng);
+            switch (observers_mode)
             {
-                if (use_kalman)
-                {
-                    // kalman
-                    kf.update(u_prev, y);
-                }
-                else
-                {
-                    obs.update(u_prev, y);
-                }
+            case ObserversMode::Luen:
+                obs.update(u_prev, z);
+                break;
+            case ObserversMode::klam:
+                kf.update(u_prev, z);
+                break;
+            case ObserversMode::Exklam:
+                // EKF
+                ekf.predict(u_prev);
+                ekf.update(z);
+                break;
             }
+
             State x_ctrl = x;
-            if (use_observer)
+            switch (observers_mode)
             {
-                x_ctrl = use_kalman ? kf.xhat : obs.xhat;
+            case ObserversMode::Luen:
+                x_ctrl = obs.xhat;
+                break;
+            case ObserversMode::klam:
+                x_ctrl = kf.xhat;
+                break;
+            case ObserversMode::Exklam:
+                x_ctrl = ekf.xhat(); // The function returns private member variables.
+                // EKF
+                break;
             }
 
             double u = 0.0;
