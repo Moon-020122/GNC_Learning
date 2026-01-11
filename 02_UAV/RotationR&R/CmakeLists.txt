@@ -1,0 +1,28 @@
+# 01_/inverted_pendulum/CMakeLists.txt
+
+# 1. 自动查找 src 目录下所有的 .cpp 文件，存入变量 SOURCES 中
+# file(GLOB SOURCES "src/*.cpp")
+
+# file(GLOB HEADERS "include/*.hpp")
+
+add_executable(RotationR_R 
+    include/rotation.hpp
+
+    src/rotation.cpp
+    src/main.cpp
+)
+
+
+# 2. 定义可执行文件
+#    名字叫 pendulum_sim (你可以随便改)
+#    源文件使用上面找到的 SOURCES
+
+# add_executable(pendulum_sim ${SOURCES} ${HEADERS})
+
+# 3. 指定头文件路径
+#    PRIVATE include: 让编译器去当前的 include/ 文件夹找 .hpp 文件
+target_include_directories(RotationR_R PRIVATE include)
+
+# 4. 链接 Eigen 库
+#    虽然 Eigen 是纯头文件库，但这样写能保证路径正确传递
+target_link_libraries(RotationR_R Eigen3::Eigen)

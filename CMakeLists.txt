@@ -14,7 +14,6 @@ find_package(Eigen3 REQUIRED)
 include_directories(${EIGEN3_INCLUDE_DIRS})
 
 # 4. 添加子目录（每开一个新章节，就在这里加一行）
-# add_subdirectory(common)
-# add_subdirectory(00_cpp_playground)
-add_subdirectory(01_/inverted_pendulum)
-# add_subdirectory(02_kalman_filter) <-- 还没学到就先注释掉
+# add_subdirectory(01_InventendPendulum/inverted_pendulum)
+
+add_subdirectory(02_UAV/RotationR&R)
