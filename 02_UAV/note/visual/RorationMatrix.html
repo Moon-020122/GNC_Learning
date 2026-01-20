@@ -1,0 +1,478 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>三轴旋转矩阵推导可视化 (真实投影版)</title>
+    <style>
+        body {
+            margin: 0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            background-color: #1a1a1a;
+            color: white;
+            font-family: 'Segoe UI', sans-serif;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        /* Mode Toggle Switch */
+        .direction-switch {
+            display: flex;
+            background: #252525;
+            border-radius: 20px;
+            padding: 4px;
+            margin-top: 20px;
+            border: 1px solid #444;
+        }
+        .dir-opt {
+            padding: 8px 16px;
+            cursor: pointer;
+            border-radius: 16px;
+            font-size: 14px;
+            color: #888;
+            transition: all 0.2s;
+        }
+        .dir-opt.active {
+            background: #ff9800; /* Orange for direction change */
+            color: black;
+            font-weight: bold;
+            box-shadow: 0 2px 10px rgba(255, 152, 0, 0.4);
+        }
+
+        .tabs {
+            display: flex;
+            margin-top: 15px;
+            background: #333;
+            border-radius: 8px;
+            padding: 4px;
+        }
+
+        .tab {
+            padding: 10px 20px;
+            cursor: pointer;
+            border-radius: 6px;
+            transition: background 0.2s;
+            color: #aaa;
+            font-weight: bold;
+        }
+
+        .tab.active {
+            background: #4facfe;
+            color: white;
+        }
+
+        .container {
+            display: flex;
+            flex-direction: row;
+            align-items: center;
+            justify-content: center;
+            gap: 40px;
+            width: 90%;
+            max-width: 1200px;
+            flex: 1;
+        }
+
+        #canvas-wrapper {
+            position: relative;
+            background: #252525;
+            border-radius: 12px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+            padding: 20px;
+        }
+
+        canvas { background: #252525; border-radius: 8px; }
+
+        .panel {
+            background: rgba(255, 255, 255, 0.05);
+            padding: 30px;
+            border-radius: 12px;
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255,255,255,0.1);
+            min-width: 360px;
+        }
+
+        h2 { margin-top: 0; color: #4facfe; font-size: 1.2rem; margin-bottom: 20px; border-bottom: 1px solid #444; padding-bottom: 10px;}
+
+        .matrix-display {
+            font-family: 'Times New Roman', serif;
+            font-style: italic;
+            font-size: 1.5rem;
+            position: relative;
+            margin: 20px 0;
+            display: inline-block;
+        }
+
+        .matrix-bracket {
+            display: inline-block;
+            border: 2px solid white;
+            width: 10px;
+            position: absolute;
+            top: 0; bottom: 0;
+        }
+        .bracket-left { border-right: none; left: -12px; }
+        .bracket-right { border-left: none; right: -12px; }
+
+        .matrix-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 15px;
+            text-align: center;
+        }
+
+        .cell { padding: 5px; border-radius: 4px; transition: background 0.2s; min-width: 60px;}
+        .cell.highlight { color: #ff5252; font-weight: bold; }
+        .cell.highlight-nb { color: #ff9800; font-weight: bold; } /* Orange for NB mode */
+        .cell.fixed { color: #666; font-style: normal; } 
+
+        .explanation {
+            font-size: 0.9rem;
+            color: #ccc;
+            line-height: 1.6;
+            margin-top: 20px;
+            background: rgba(0,0,0,0.2);
+            padding: 15px;
+            border-radius: 8px;
+            font-family: 'Segoe UI', sans-serif;
+        }
+
+        input[type=range] { width: 100%; margin: 15px 0; accent-color: #4facfe; }
+    </style>
+</head>
+<body>
+
+<!-- Direction Switch -->
+<div class="direction-switch">
+    <div class="dir-opt active" id="dir-bn" onclick="setDirection('bn')">机体 -> 导航 (Body to Nav)</div>
+    <div class="dir-opt" id="dir-nb" onclick="setDirection('nb')">导航 -> 机体 (Nav to Body)</div>
+</div>
+
+<div class="tabs">
+    <div class="tab" onclick="setMode('x')" id="tab-x">1. 绕 X 轴 (Roll)</div>
+    <div class="tab" onclick="setMode('y')" id="tab-y">2. 绕 Y 轴 (Pitch)</div>
+    <div class="tab active" onclick="setMode('z')" id="tab-z">3. 绕 Z 轴 (Yaw)</div>
+</div>
+
+<div class="container">
+    <div id="canvas-wrapper">
+        <canvas id="vizCanvas" width="500" height="500"></canvas>
+    </div>
+
+    <div class="panel">
+        <h2 id="panel-title">推导: Rz(ψ)</h2>
+        
+        <div class="matrix-display">
+            <div class="matrix-bracket bracket-left"></div>
+            <div class="matrix-grid" id="matrix-grid">
+                <!-- Cells will be injected by JS -->
+            </div>
+            <div class="matrix-bracket bracket-right"></div>
+        </div>
+
+        <div style="display:flex; justify-content:space-between; margin-top:10px;">
+            <span>旋转演示</span>
+            <span id="angle-val" style="color: #4facfe; font-family: monospace;">30°</span>
+        </div>
+        <input type="range" id="angle-slider" min="-180" max="180" value="30">
+
+        <div class="explanation" id="expl-text">
+            <!-- Text injected by JS -->
+        </div>
+    </div>
+</div>
+
+<script>
+    const canvas = document.getElementById('vizCanvas');
+    const ctx = canvas.getContext('2d');
+    const slider = document.getElementById('angle-slider');
+    const angleDisplay = document.getElementById('angle-val');
+    const matrixGrid = document.getElementById('matrix-grid');
+    const panelTitle = document.getElementById('panel-title');
+    const explText = document.getElementById('expl-text');
+
+    let currentMode = 'z'; // x, y, z
+    let currentDir = 'bn'; // bn (Body->Nav), nb (Nav->Body)
+
+    const modes = {
+        'z': {
+            title: "Yaw (Z轴)",
+            sym: 'ψ',
+            desc_bn: "<strong>Body -> Nav</strong><br>看图：<span style='color:#ff5252'>红色机体轴</span> 投影到 <span style='color:#aaa'>黑色导航轴</span>。<br>红色 X 轴在黑色 Y 轴上的投影是向上的 ($sin$)。",
+            desc_nb: "<strong>Nav -> Body</strong><br>看图：<span style='color:#aaa'>黑色导航轴</span> 投影到 <span style='color:#ff5252'>红色机体轴</span>。<br>黑色 X 轴在 <span style='color:#00e676'>绿色 Y 轴</span> 上的投影是反向的 ($-sin$)！",
+            mat_bn: () => `
+                <div class="cell highlight">cos ψ</div> <div class="cell highlight">-sin ψ</div> <div class="cell fixed">0</div>
+                <div class="cell highlight">sin ψ</div> <div class="cell highlight">cos ψ</div> <div class="cell fixed">0</div>
+                <div class="cell fixed">0</div> <div class="cell fixed">0</div> <div class="cell fixed">1</div>
+            `,
+            mat_nb: () => `
+                <div class="cell highlight-nb">cos ψ</div> <div class="cell highlight-nb">sin ψ</div> <div class="cell fixed">0</div>
+                <div class="cell highlight-nb">-sin ψ</div> <div class="cell highlight-nb">cos ψ</div> <div class="cell fixed">0</div>
+                <div class="cell fixed">0</div> <div class="cell fixed">0</div> <div class="cell fixed">1</div>
+            `
+        },
+        'x': {
+            title: "Roll (X轴)",
+            sym: 'ϕ',
+            desc_bn: "<strong>Body -> Nav</strong><br>红轴投影到黑轴。<br>X 轴不动 (1)。",
+            desc_nb: "<strong>Nav -> Body</strong><br>黑轴投影到红轴。<br>注意看虚线是从黑色箭头出发的。",
+            mat_bn: () => `
+                <div class="cell fixed">1</div> <div class="cell fixed">0</div> <div class="cell fixed">0</div>
+                <div class="cell fixed">0</div> <div class="cell highlight">cos ϕ</div> <div class="cell highlight">-sin ϕ</div>
+                <div class="cell fixed">0</div> <div class="cell highlight">sin ϕ</div> <div class="cell highlight">cos ϕ</div>
+            `,
+            mat_nb: () => `
+                <div class="cell fixed">1</div> <div class="cell fixed">0</div> <div class="cell fixed">0</div>
+                <div class="cell fixed">0</div> <div class="cell highlight-nb">cos ϕ</div> <div class="cell highlight-nb">sin ϕ</div>
+                <div class="cell fixed">0</div> <div class="cell highlight-nb">-sin ϕ</div> <div class="cell highlight-nb">cos ϕ</div>
+            `
+        },
+        'y': {
+            title: "Pitch (Y轴)",
+            sym: 'θ',
+            desc_bn: "<strong>Body -> Nav</strong><br>Y 轴旋转。红色 X 轴投影到黑色 Z 轴是负的 ($-\\sin$)。",
+            desc_nb: "<strong>Nav -> Body</strong><br>黑色 X 轴投影到红色 Z 轴是正的 ($sin$)。<br>黑色 Z 轴投影到红色 X 轴是负的 ($-\\sin$)。",
+            mat_bn: () => `
+                <div class="cell highlight">cos θ</div> <div class="cell fixed">0</div> <div class="cell highlight">sin θ</div>
+                <div class="cell fixed">0</div> <div class="cell fixed">1</div> <div class="cell fixed">0</div>
+                <div class="cell highlight">-sin θ</div> <div class="cell fixed">0</div> <div class="cell highlight">cos θ</div>
+            `,
+            mat_nb: () => `
+                <div class="cell highlight-nb">cos θ</div> <div class="cell fixed">0</div> <div class="cell highlight-nb">-sin θ</div>
+                <div class="cell fixed">0</div> <div class="cell fixed">1</div> <div class="cell fixed">0</div>
+                <div class="cell highlight-nb">sin θ</div> <div class="cell fixed">0</div> <div class="cell highlight-nb">cos θ</div>
+            `
+        }
+    };
+
+    function setDirection(dir) {
+        currentDir = dir;
+        document.getElementById('dir-bn').classList.toggle('active', dir === 'bn');
+        document.getElementById('dir-nb').classList.toggle('active', dir === 'nb');
+        render();
+    }
+
+    function setMode(mode) {
+        currentMode = mode;
+        ['x', 'y', 'z'].forEach(m => {
+            document.getElementById(`tab-${m}`).classList.toggle('active', m === mode);
+        });
+        slider.value = 30; // Reset for clarity
+        render();
+    }
+
+    function drawArrow(x1, y1, x2, y2, color, width=2) {
+        ctx.beginPath();
+        ctx.strokeStyle = color;
+        ctx.lineWidth = width;
+        ctx.moveTo(x1, y1);
+        ctx.lineTo(x2, y2);
+        ctx.stroke();
+
+        const headLen = 10;
+        const angle = Math.atan2(y2 - y1, x2 - x1);
+        ctx.beginPath();
+        ctx.fillStyle = color;
+        ctx.moveTo(x2, y2);
+        ctx.lineTo(x2 - headLen * Math.cos(angle - Math.PI / 6), y2 - headLen * Math.sin(angle - Math.PI / 6));
+        ctx.lineTo(x2 - headLen * Math.cos(angle + Math.PI / 6), y2 - headLen * Math.sin(angle + Math.PI / 6));
+        ctx.fill();
+    }
+
+    function drawDashedLine(x1, y1, x2, y2, color) {
+        ctx.beginPath();
+        ctx.setLineDash([5, 5]);
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 1;
+        ctx.moveTo(x1, y1);
+        ctx.lineTo(x2, y2);
+        ctx.stroke();
+        ctx.setLineDash([]);
+    }
+
+    function drawText(text, x, y, color, align='center', baseline='middle') {
+        ctx.fillStyle = color;
+        ctx.font = '16px monospace';
+        ctx.textAlign = align;
+        ctx.textBaseline = baseline;
+        ctx.fillText(text, x, y);
+    }
+
+    function projectPointOnLine(px, py, lx1, ly1, lx2, ly2) {
+        // Project point (px,py) onto line defined by (lx1,ly1)->(lx2,ly2)
+        // Vector L = P2 - P1
+        const Lx = lx2 - lx1;
+        const Ly = ly2 - ly1;
+        const L_mag2 = Lx*Lx + Ly*Ly;
+        
+        // Vector V = P - P1
+        const Vx = px - lx1;
+        const Vy = py - ly1;
+        
+        // Projection t = (V dot L) / (L dot L)
+        const t = (Vx * Lx + Vy * Ly) / L_mag2;
+        
+        return {
+            x: lx1 + t * Lx,
+            y: ly1 + t * Ly
+        };
+    }
+
+    function render() {
+        const width = canvas.width;
+        const height = canvas.height;
+        const cx = width / 2;
+        const cy = height / 2;
+        const scale = 160;
+
+        ctx.clearRect(0, 0, width, height);
+        
+        const config = modes[currentMode];
+        const isNB = currentDir === 'nb';
+        
+        panelTitle.innerText = config.title;
+        explText.innerHTML = isNB ? config.desc_nb : config.desc_bn;
+        matrixGrid.innerHTML = isNB ? config.mat_nb() : config.mat_bn();
+
+        const deg = parseFloat(slider.value);
+        const rad = deg * Math.PI / 180;
+        angleDisplay.innerText = deg + "°";
+        
+        // Determine labels and standard axes
+        let hLabel, vLabel;
+        if (currentMode === 'z') { hLabel = 'X'; vLabel = 'Y'; } 
+        else if (currentMode === 'x') { hLabel = 'Y'; vLabel = 'Z'; } 
+        else if (currentMode === 'y') { hLabel = 'Z'; vLabel = 'X'; } // Visual Pitch: Horiz=Z, Vert=X
+
+        // 1. Draw Static Black Axes (Nav/Old Frame)
+        // Horizontal
+        const bx_endX = width - 20; const bx_endY = cy;
+        drawArrow(20, cy, bx_endX, bx_endY, '#666'); 
+        drawText(hLabel + "_nav", width - 30, cy + 20, '#888');
+
+        // Vertical
+        const by_endX = cx; const by_endY = 20;
+        drawArrow(cx, height - 20, by_endX, by_endY, '#666');
+        drawText(vLabel + "_nav", cx + 20, 30, '#888');
+
+        // 2. Calculate Rotated Axes (Red/Green Body Frame)
+        let rx, ry, gx, gy; // Red Tip coords, Green Tip coords
+        
+        if (currentMode === 'y') {
+            // Pitch logic
+            // Body X (Red) = Rotated from Vertical(Nav X) by Theta
+            // Body Z (Green) = Rotated from Horizontal(Nav Z) by Theta
+            // Wait, Standard Pitch is: X axis rotates towards Z axis?
+            // Body X = Nav X cos + Nav Z (-sin).
+            // Visual: Red starts Vertical, rotates Left (Counter-Clockwise in this view)
+            rx = cx + (-Math.sin(rad) * scale);
+            ry = cy - (Math.cos(rad) * scale);
+            
+            gx = cx + (Math.cos(rad) * scale);
+            gy = cy - (Math.sin(rad) * scale);
+
+        } else {
+            // Standard Z/X Logic
+            // Red (Axis 1) starts Horizontal, rotates CCW
+            rx = cx + Math.cos(rad) * scale;
+            ry = cy - Math.sin(rad) * scale;
+            
+            // Green (Axis 2) starts Vertical, rotates CCW
+            gx = cx - Math.sin(rad) * scale;
+            gy = cy - Math.cos(rad) * scale;
+        }
+
+        drawArrow(cx, cy, rx, ry, '#ff5252', 3); // Red Axis
+        drawArrow(cx, cy, gx, gy, '#00e676', 3); // Green Axis
+
+        // Labels for Rotated Axes
+        drawText(currentMode==='y'?"X_body":hLabel+"_body", rx, ry - 15, '#ff5252');
+        drawText(currentMode==='y'?"Z_body":vLabel+"_body", gx, gy - 15, '#00e676');
+
+
+        // --- PROJECTION VISUALIZATION ---
+        // This is where the magic happens
+        const sym = config.sym;
+
+        if (!isNB) {
+            // MODE: Body -> Nav (Project Red onto Black)
+            // We highlight the RED arrow components
+            
+            // 1. Project Red Tip onto Horizontal Black Axis
+            drawDashedLine(rx, ry, rx, cy, '#666');
+            drawText("cos " + sym, rx, cy + 15, '#ff5252'); // X component
+
+            // 2. Project Red Tip onto Vertical Black Axis
+            drawDashedLine(rx, ry, cx, ry, '#666');
+            // Label Sign Logic
+            let labelV = "sin " + sym;
+            // Pitch special case: Red is X_body. Nav Vert is X_nav. Proj is cos.
+            // Nav Horiz is Z_nav. Proj is -sin.
+            if(currentMode === 'y') {
+                // Pitch: Red X projects to Vert(Nav X) as cos.
+                // Red X projects to Horiz(Nav Z) as -sin.
+                // Red tip x-coord is left of center -> negative.
+                drawText("-sin " + sym, rx, cy + 15, '#ff5252'); // Overwrite horizontal label
+                drawText("cos " + sym, cx - 35, ry, '#ff5252'); // Overwrite vertical label
+            } else {
+                drawText("sin " + sym, cx - 35, ry, '#ff5252');
+            }
+
+        } else {
+            // MODE: Nav -> Body (Project Black onto Red/Green)
+            // We highlight the BLACK Horizontal/Vertical arrow components onto the Body Frame
+            
+            // Let's project the NAV AXIS 1 (Horizontal usually, or Vertical for Pitch X) onto Body Axes.
+            
+            let sourceX, sourceY;
+            
+            if (currentMode === 'y') {
+                // For Pitch, let's project the Vertical Nav Axis (Nav X) because it's the primary axis
+                sourceX = by_endX; // cx
+                sourceY = by_endY + (height-20-by_endY) - scale; // Wait, by_endY is top. Base is height-20. 
+                // Let's just use point at 'scale' distance up
+                sourceX = cx;
+                sourceY = cy - scale;
+                
+                // Draw emphasis circle on tip
+                ctx.beginPath(); ctx.arc(sourceX, sourceY, 4, 0, Math.PI*2); ctx.fillStyle='#fff'; ctx.fill();
+
+                // Project Black Tip onto Red Line (Body X)
+                const pRed = projectPointOnLine(sourceX, sourceY, cx, cy, rx, ry);
+                drawDashedLine(sourceX, sourceY, pRed.x, pRed.y, '#ff9800');
+                drawText("cos " + sym, (sourceX+pRed.x)/2 + 10, (sourceY+pRed.y)/2, '#ff9800');
+
+                // Project Black Tip onto Green Line (Body Z)
+                const pGreen = projectPointOnLine(sourceX, sourceY, cx, cy, gx, gy);
+                drawDashedLine(sourceX, sourceY, pGreen.x, pGreen.y, '#ff9800');
+                drawText("sin " + sym, (sourceX+pGreen.x)/2 + 10, (sourceY+pGreen.y)/2, '#ff9800');
+
+            } else {
+                // Standard: Project Horizontal Nav Axis (Nav X) onto Body Axes
+                sourceX = cx + scale;
+                sourceY = cy;
+                
+                // Emphasis
+                ctx.beginPath(); ctx.arc(sourceX, sourceY, 4, 0, Math.PI*2); ctx.fillStyle='#fff'; ctx.fill();
+
+                // Project Black Tip onto Red Line (Body X)
+                const pRed = projectPointOnLine(sourceX, sourceY, cx, cy, rx, ry);
+                drawDashedLine(sourceX, sourceY, pRed.x, pRed.y, '#ff9800');
+                drawText("cos " + sym, (sourceX+pRed.x)/2, (sourceY+pRed.y)/2 - 10, '#ff9800');
+
+                // Project Black Tip onto Green Line (Body Y)
+                // Note: Green is rotated. Black X projects onto Green Y.
+                // Angle between Black X and Green Y is 90+psi. Projection should be -sin.
+                const pGreen = projectPointOnLine(sourceX, sourceY, cx, cy, gx, gy);
+                drawDashedLine(sourceX, sourceY, pGreen.x, pGreen.y, '#ff9800');
+                drawText("-sin " + sym, (sourceX+pGreen.x)/2, (sourceY+pGreen.y)/2 + 10, '#ff9800');
+            }
+        }
+    }
+
+    setMode('z'); // Init
+    slider.addEventListener('input', render);
+
+</script>
+</body>
+</html>

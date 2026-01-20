@@ -3,8 +3,7 @@
 #include <cmath>
 
 #include "rotation.hpp"
-
-static double deg2rad(double deg) { return deg * M_PI / 180.0; }
+#include "validation.hpp"
 
 int main()
 {
@@ -20,7 +19,7 @@ int main()
     double max_det = 0.0;
     double max_qnorm_err = 0.0;
     double max_Rdiff = 0.0;
-
+    // Generate a set of roll/pitch/yaw randomly each time
     for (int i = 0; i < N; ++i)
     {
         const double roll = uni(rng);
@@ -32,8 +31,8 @@ int main()
         // (simulate "drift" then normalize, to show the check has meaning)
         Eigen::Quaterniond q_drift = q;
         q_drift.w() *= 1.000001; // tiny drift
-        //If a disturbance is added, it will fail the check.
-        // Eigen::Quaterniond q_norm = gnc::normalizeQuat(q_drift);
+        // If a disturbance is added, it will fail the check.
+        //  Eigen::Quaterniond q_norm = gnc::normalizeQuat(q_drift);
         Eigen::Quaterniond q_norm = gnc::normalizeQuat(q);
 
         const double qnorm_err = std::abs(q_norm.norm() - 1.0);
@@ -73,7 +72,130 @@ int main()
 
     std::cout << "PASS? " << (pass ? "YES" : "NO") << "\n";
 
-        return pass
+    bool pass_2 = true;
+    pass_2 &= gnc::runModule2HoverTest();
+    pass_2 &= gnc::runModule2ConstantOmegaTest();
+    pass_2 &= gnc::runEulerOmegaMappingSanity();
+
+    // module3
+    bool pass_3;
+    pass_3 = gnc::runModule3StepSizeStability();
+
+    // module 4
+    pass &= gnc::testPureThrust();
+    pass &= gnc::testPureRollTorque();
+    pass &= gnc::testSaturationSafety();
+    pass &= gnc::testMotorLag(); // optional
+
+    // cascade Pid module
+    gnc::KinematicsParams plant;
+    plant.mass = 1.5;
+    plant.gravity = 9.81;
+    plant.linear_drag = 0.2;
+
+    // inertia(example)
+    plant.rb.I_b = (Eigen::Vector3d(0.02, 0.03, 0.04)).asDiagonal();
+    plant.rb.I_b_inv = plant.rb.I_b.inverse();
+    plant.rb.rotor_J = 0.0;
+    plant.rb.omega_spin_sum = 0.0;
+
+    // --- Mixer & motors ---
+    auto cfg = gnc::makeQuadX(0.25, 1e-5, 1e-6, 0.0, 2000.0);
+    auto mx = gnc::buildMixer(cfg); // A Matrix
+
+    gnc::MotorParams mp;
+    mp.tau_m = 0.05;
+
+    //---Controller ---
+    gnc::CascadeController ctrl;
+    auto cparams = gnc::makeDefaultControllerParams(plant.mass, plant.gravity);
+    // 4* Maximum lift of a single rotor
+    cparams.thrust_max = 4.0 * cfg.kT * cfg.omega_max * cfg.omega_max;
+
+    ctrl.setParams(cparams);
+    ctrl.reset();
+
+    const double dt = 0.002;
+    // Initial state
+    gnc::RigidBodyState s0;
+    s0.p_n = Eigen::Vector3d(0.0, 0.0, 0.0);
+    s0.v_n = Eigen::Vector3d(0.0, 0.0, 0.0);
+    s0.q_bn = Eigen::Quaterniond::Identity();
+    s0.omega_b.setZero();
+
+    // =====1) Hovering anti-disturbance =====
+    gnc::simulateScenario(
+        "Hover hold with disturbance",
+        s0,
+        plant, ctrl, cfg, mx, mp,
+        dt, 8.0,
+        [](double /*t*/)
+        {
+            gnc::Reference r;
+            r.p_des = Eigen::Vector3d(0.0, 0.0, 0.0);
+            r.v_ff.setZero();
+            r.a_ff.setZero();
+            r.yaw_des = 0.0;
+            return r;
+        },
+        [](double t)-> Eigen::Vector3d
+        {
+            // Apply a northward acceleration disturbance for 0-1 seconds, then remove it.
+            if (t < 1.0) 
+                return Eigen::Vector3d(0.8, 0.0, 0.0);
+            return Eigen::Vector3d::Zero();
+        });
+
+    ctrl.reset();
+
+    //=====2) Cruise control and braking to a stop =====
+    gnc::simulateScenario(
+        "cruise 1m/s then stop",
+        s0, plant, ctrl, cfg, mx, mp,
+        dt, 10.0,
+        [](double t)
+        {
+            gnc::Reference r;
+            // 1 m/s in the N direction, stops after five seconds
+            const double v = (t < 5.0) ? 1.0 : 0.0;
+            // Generate a consistent p_des: integrating to obtain the expected position to avoid conflicts
+            // with the position loop and velocity feedforward.
+            const double p = (t < 5.0) ? (1.0 * t) : (1.0 * 5.0);
+            r.p_des = Eigen::Vector3d(p, 0.0, 0.0);
+            r.v_ff = Eigen::Vector3d(v, 0.0, 0.0);
+            r.a_ff = Eigen::Vector3d::Zero();
+            r.yaw_des = 0.0;
+            return r;
+        },
+        [](double /*t*/)
+        { return Eigen::Vector3d::Zero(); });
+
+    ctrl.reset();
+
+    //=====3)circle tracking ====
+    gnc::simulateScenario(
+        "circle tracking",
+        s0,
+        plant, ctrl, cfg, mx, mp,
+        dt, 12.0,
+        [](double t)
+        {
+            gnc::Reference r;
+            const double R = 2.0;              // meters
+            const double w = 2.0 * M_PI / 8.0; // rad/s (period 8s)  angle velocity
+            const double ct = std::cos(w * t);
+            const double st = std::sin(w * t);
+
+            r.p_des = Eigen::Vector3d(R * ct, R * st, 0.0);
+            r.v_ff = Eigen::Vector3d(-R * w * st, R * w * ct, 0.0);
+            r.a_ff = Eigen::Vector3d(-R * w * w * ct, -R * w * w * st, 0.0);
+            r.yaw_des = 0.0;
+            return r;
+        },
+        [](double /*t*/)
+        { return Eigen::Vector3d::Zero(); });
+
+            return pass
         ? 0
         : 1;
 }

@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>线速度与角速度关系演示 (Door Demo)</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #1e1e1e; font-family: 'Segoe UI', sans-serif; color: white; }
+        
+        #ui-panel {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            width: 340px;
+            background: rgba(0, 0, 0, 0.85);
+            border: 1px solid #444;
+            border-radius: 8px;
+            padding: 20px;
+            pointer-events: auto;
+            backdrop-filter: blur(5px);
+        }
+
+        h2 { margin: 0 0 10px 0; font-size: 18px; color: #4facfe; border-bottom: 1px solid #555; padding-bottom: 8px; }
+
+        .math-eq {
+            font-family: 'Times New Roman', serif;
+            font-style: italic;
+            font-size: 20px;
+            text-align: center;
+            margin: 15px 0;
+            background: rgba(255,255,255,0.1);
+            padding: 8px;
+            border-radius: 4px;
+        }
+        .math-eq b { font-weight: bold; font-style: normal; }
+        
+        .legend-item { display: flex; align-items: center; margin-bottom: 8px; font-size: 14px; }
+        .dot { width: 12px; height: 12px; border-radius: 50%; margin-right: 10px; }
+        
+        .control-row { display: flex; gap: 10px; margin-top: 20px; }
+        button {
+            flex: 1; padding: 8px; background: #333; border: 1px solid #555; color: white; border-radius: 4px; cursor: pointer;
+        }
+        button:hover { background: #444; }
+
+        #desc-box { font-size: 13px; color: #aaa; line-height: 1.5; margin-top: 15px; }
+        
+        .highlight { color: #ffeb3b; font-weight: bold; }
+    </style>
+</head>
+<body>
+
+<div id="ui-panel">
+    <h2>刚体运动学可视 (叉乘)</h2>
+    
+    <div class="math-eq">
+        <span style="color:#ff5252"><b>v</b></span> = 
+        <span style="color:#00e676"><b>ω</b></span> × 
+        <span style="color:#ffff00"><b>r</b></span>
+    </div>
+
+    <div class="legend-item"><span class="dot" style="background:#00e676"></span><b>ω (角速度)</b>: 沿旋转轴 (铰链)</div>
+    <div class="legend-item"><span class="dot" style="background:#ffff00"></span><b>r (位置向量)</b>: 原点 -> 边缘点 P</div>
+    <div class="legend-item"><span class="dot" style="background:#ff5252"></span><b>v (线速度)</b>: 切线方向</div>
+
+    <div id="desc-box">
+        观察：<br>
+        1. 门绕着绿色的轴转动。<br>
+        2. 点 P (白球) 离轴有距离。<br>
+        3. <span class="highlight">红箭头 (v)</span> 始终垂直于 <span class="highlight">黄箭头 (r)</span> 和 <span class="highlight">绿箭头 (ω)</span> 构成的平面。
+    </div>
+
+    <div class="control-row">
+        <button onclick="togglePause()">暂停/继续</button>
+        <button onclick="resetCam()">重置视角</button>
+    </div>
+</div>
+
+<script>
+// IIFE 隔离作用域
+(function() {
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x222222);
+    
+    // Grid
+    const grid = new THREE.GridHelper(20, 20, 0x444444, 0x111111);
+    scene.add(grid);
+
+    // Camera
+    const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 100);
+    camera.position.set(8, 8, 8);
+    camera.lookAt(0, 3, 0);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    document.body.appendChild(renderer.domElement);
+
+    const controls = new THREE.OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.target.set(0, 3, 0);
+
+    // Lights
+    scene.add(new THREE.AmbientLight(0xffffff, 0.5));
+    const dirLight = new THREE.DirectionalLight(0xffffff, 1);
+    dirLight.position.set(5, 10, 5);
+    scene.add(dirLight);
+
+    // --- Actors ---
+
+    // 1. Hinge Axis (Omega)
+    const omegaDir = new THREE.Vector3(0, 1, 0);
+    const origin = new THREE.Vector3(0, 0, 0);
+    const hingeHeight = 7;
+    
+    // Visual Hinge
+    const hingeGeo = new THREE.CylinderGeometry(0.1, 0.1, hingeHeight, 16);
+    const hingeMat = new THREE.MeshPhongMaterial({ color: 0x555555 });
+    const hinge = new THREE.Mesh(hingeGeo, hingeMat);
+    hinge.position.y = hingeHeight / 2;
+    scene.add(hinge);
+
+    // Omega Vector (Green Arrow)
+    const arrowOmega = new THREE.ArrowHelper(omegaDir, new THREE.Vector3(0, hingeHeight + 0.5, 0), 2, 0x00e676, 0.5, 0.3);
+    scene.add(arrowOmega);
+
+    // 2. The Door (Rotating Rigid Body)
+    const doorGroup = new THREE.Group();
+    scene.add(doorGroup);
+
+    const doorWidth = 4;
+    const doorHeight = 6;
+    const doorGeo = new THREE.BoxGeometry(doorWidth, doorHeight, 0.2);
+    const doorMat = new THREE.MeshPhongMaterial({ 
+        color: 0x4facfe, 
+        transparent: true, 
+        opacity: 0.6,
+        side: THREE.DoubleSide
+    });
+    // Shift geometry so left edge is at x=0
+    doorGeo.translate(doorWidth / 2, doorHeight / 2, 0);
+    const doorMesh = new THREE.Mesh(doorGeo, doorMat);
+    doorGroup.add(doorMesh);
+
+    // 3. Point P on the edge (Top-Right corner)
+    const pLocalPos = new THREE.Vector3(doorWidth, doorHeight, 0);
+    
+    // Visual Marker for P
+    const pointMesh = new THREE.Mesh(
+        new THREE.SphereGeometry(0.15, 16, 16),
+        new THREE.MeshBasicMaterial({ color: 0xffffff })
+    );
+    // Attach to doorGroup so it moves with door
+    pointMesh.position.copy(pLocalPos);
+    doorGroup.add(pointMesh);
+
+    // 4. Vectors r and v (Dynamic)
+    // We add them to SCENE (World Frame) to visualize mathematical vectors from origin
+    
+    // Vector r (Yellow): Origin -> Point P
+    const arrowR = new THREE.ArrowHelper(
+        new THREE.Vector3(1, 0, 0), 
+        origin, 
+        1, 
+        0xffff00, 
+        0.4, 0.2
+    );
+    scene.add(arrowR);
+
+    // Vector v (Red): At Point P, tangent
+    const arrowV = new THREE.ArrowHelper(
+        new THREE.Vector3(0, 0, 1), 
+        origin, 
+        2.5, 
+        0xff5252, 
+        0.4, 0.2
+    );
+    scene.add(arrowV);
+
+    // Dashed line for r_perp (Radius from axis)
+    const radiusLineGeo = new THREE.BufferGeometry();
+    const radiusLine = new THREE.Line(radiusLineGeo, new THREE.LineDashedMaterial({
+        color: 0xaaaaaa,
+        dashSize: 0.2,
+        gapSize: 0.1,
+    }));
+    scene.add(radiusLine);
+
+    // Trail
+    const trailPoints = [];
+    const maxTrail = 100;
+    const trailGeo = new THREE.BufferGeometry();
+    const trailLine = new THREE.Line(trailGeo, new THREE.LineBasicMaterial({ color: 0xff5252, opacity: 0.5, transparent: true }));
+    scene.add(trailLine);
+
+    // --- Logic ---
+    let isPaused = false;
+    let angle = 0;
+    const speed = 1.0;
+
+    window.togglePause = () => { isPaused = !isPaused; };
+    window.resetCam = () => { 
+        camera.position.set(8, 8, 8); 
+        controls.target.set(0, 3, 0);
+    };
+
+    function animate() {
+        requestAnimationFrame(animate);
+        controls.update();
+
+        if (!isPaused) {
+            angle += 0.01 * speed;
+            doorGroup.rotation.y = Math.sin(angle) * Math.PI / 2; // Swing back and forth
+        }
+
+        // Calculate World Position of P
+        const pWorld = pLocalPos.clone().applyMatrix4(doorGroup.matrixWorld);
+
+        // Update Vector r (Origin -> P)
+        const rVec = pWorld.clone().sub(origin); // Vector from (0,0,0) to P
+        const rLen = rVec.length();
+        arrowR.setDirection(rVec.clone().normalize());
+        arrowR.setLength(rLen);
+
+        // Update Vector v = omega x r
+        // Omega is along Y axis (0, 1, 0) magnitude let's say 1 for direction visualization
+        // Real velocity magnitude depends on speed, but for visual we normalize or scale
+        const omegaVec = new THREE.Vector3(0, 1, 0);
+        const vVec = new THREE.Vector3().crossVectors(omegaVec, rVec);
+        
+        // v is attached at Point P visually for clarity
+        arrowV.position.copy(pWorld);
+        arrowV.setDirection(vVec.clone().normalize());
+        // Length proportional to radius? Or fixed? Let's fix for visibility
+        arrowV.setLength(2.5);
+
+        // Update Radius Line (Projection)
+        // From (0, P.y, 0) to P
+        const axisPoint = new THREE.Vector3(0, pWorld.y, 0);
+        radiusLineGeo.setFromPoints([axisPoint, pWorld]);
+        radiusLine.computeLineDistances();
+
+        // Update Trail
+        if (!isPaused) {
+            trailPoints.push(pWorld.clone());
+            if (trailPoints.length > maxTrail) trailPoints.shift();
+            trailGeo.setFromPoints(trailPoints);
+        }
+
+        renderer.render(scene, camera);
+    }
+
+    animate();
+
+    window.addEventListener('resize', () => {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+})();
+</script>
+</body>
+</html>

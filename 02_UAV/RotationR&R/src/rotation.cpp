@@ -21,7 +21,6 @@ namespace gnc
         return R;
     }
 
-
     Eigen::Quaterniond euluerZYXToQuat(double roll, double pitch, double yaw)
     {
         // ZYX: q = qz(yaw) ⊗ qy(pitch) ⊗ qx(roll)
@@ -70,18 +69,86 @@ namespace gnc
         out.normalize();
         return out;
     }
-    double orthogonalityError(const Eigen::Matrix3d &R)
+
+
+    Eigen::Quaterniond integrateQuatBodyRate(
+        const Eigen::Quaterniond &q_bn,
+        const Eigen::Vector3d &omega_b,
+        double dt)
     {
-        Eigen::Matrix3d E = R.transpose() * R - Eigen::Matrix3d::Identity();
-        return E.cwiseAbs().maxCoeff(); // infinity norm (max abs element)
+        const double p = omega_b.x();
+        const double q = omega_b.y();
+        const double r = omega_b.z();
+
+        const double w = q_bn.w();
+        const double x = q_bn.x();
+        const double y = q_bn.y();
+        const double z = q_bn.z();
+
+        // q_dot = 0.5 * Omega(omega) * q (body rates)
+
+        Eigen::Quaterniond q_dot;
+        q_dot.w() = -0.5 * (x * p + y * q + z * r);
+        q_dot.x() = 0.5 * (w * p + y * r - z * q);
+        q_dot.y() = 0.5 * (w * q + z * p - x * r);
+        q_dot.z() = 0.5 * (w * r + x * q - y * p);
+
+        Eigen::Quaterniond q_next(
+            w + q_dot.w() * dt,
+            x + q_dot.x() * dt,
+            y + q_dot.y() * dt,
+            z + q_dot.z() * dt);
+
+        return normalizeQuat(q_next);
     }
-    double detError(const Eigen::Matrix3d &R)
+
+    Eigen::Vector3d eulerRatesToBodyOmegaZYX(
+        double roll, double pitch,
+        const Eigen::Vector3d &euler_dot)
     {
-        return std::abs(R.determinant() - 1.0);
+        const double phi = roll;
+        const double theta = pitch;
+
+        const double cphi = std::cos(phi);
+        const double sphi = std::sin(phi);
+        const double cth = std::cos(theta);
+        const double sth = std::sin(theta);
+
+        Eigen::Matrix3d E;
+        E << 1.0, 0.0, -sth,
+            0.0, cphi, sphi * cth,
+            0.0, -sphi, cphi * cth;
+
+        return E * euler_dot;
     }
-    double rotationDiff(const Eigen::Matrix3d &A, const Eigen::Matrix3d &B)
+
+    bool bodyOmegaToEulerRatesZYX(
+        double roll, double pitch,
+        const Eigen::Vector3d &omega_b,
+        Eigen::Vector3d *euler_dot_out)
     {
-        return (A - B).cwiseAbs().maxCoeff();
+        const double phi = roll;
+        const double theta = pitch;
+
+        const double cphi = std::cos(phi);
+        const double sphi = std::sin(phi);
+        const double cth = std::cos(theta);
+
+        // singular when cos(theta) -> 0
+        if (std::abs(cth) < 1e-6)
+        {
+            return false;
+        }
+
+        const double tth = std::tan(theta);
+
+        Eigen::Matrix3d W;
+        W << 1.0, sphi * tth, cphi * tth,
+            0.0, cphi, -sphi,
+            0.0, sphi / cth, cphi / cth;
+
+        *euler_dot_out = W * omega_b;
+        return true;
     }
 
 }

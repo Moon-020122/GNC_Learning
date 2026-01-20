@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GNC NED 陀螺效应终极演示</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #1e1e1e; font-family: 'Segoe UI', sans-serif; color: white; }
+        
+        #ui-panel {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            width: 320px;
+            background: rgba(0, 0, 0, 0.9);
+            border: 2px solid #555;
+            border-radius: 10px;
+            padding: 20px;
+            box-shadow: 0 0 20px rgba(0,0,0,0.8);
+        }
+
+        h1 { font-size: 18px; margin: 0 0 10px 0; color: #ff9800; border-bottom: 1px solid #444; padding-bottom: 8px; }
+        
+        .legend { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 5px; margin-bottom: 15px; font-size: 12px; font-weight: bold; text-align: center; }
+        .legend div { padding: 4px; border-radius: 4px; background: #333; }
+        
+        .btn-main {
+            width: 100%;
+            padding: 15px;
+            background: linear-gradient(135deg, #0055aa, #0088ff);
+            border: none;
+            border-radius: 6px;
+            color: white;
+            font-weight: bold;
+            cursor: pointer;
+            text-align: left;
+            margin-bottom: 10px;
+            transition: transform 0.1s;
+        }
+        .btn-main:active { transform: scale(0.98); }
+        .btn-main small { display: block; font-weight: normal; font-size: 0.85em; opacity: 0.8; margin-top: 4px; }
+
+        .btn-reset {
+            width: 100%;
+            padding: 8px;
+            background: #444;
+            border: 1px solid #666;
+            color: #aaa;
+            cursor: pointer;
+            border-radius: 4px;
+        }
+        .btn-reset:hover { background: #555; color: white; }
+
+        #status-box {
+            margin-top: 15px;
+            padding: 10px;
+            background: #111;
+            border-left: 4px solid #ff9800;
+            font-family: monospace;
+            font-size: 13px;
+            line-height: 1.5;
+            min-height: 60px;
+        }
+
+        .highlight-up { color: #ff5252; font-weight: bold; }
+        .highlight-axis { color: #4facfe; font-weight: bold; }
+    </style>
+</head>
+<body>
+
+<div id="ui-panel">
+    <h1>GNC (NED) 坐标系演示</h1>
+    
+    <div class="legend">
+        <div style="color:#ff5252">X: 前 (北)</div>
+        <div style="color:#00e676">Y: 右 (东)</div>
+        <div style="color:#4facfe">Z: 下 (地)</div>
+    </div>
+
+    <button class="btn-main" onmousedown="window.applyForce('left')" onmouseup="window.resetForce()" ontouchstart="window.applyForce('left')" ontouchend="window.resetForce()">
+        👉 动作：向左推机头 (-Y)
+        <small>施加 <strong>绕 Z 轴</strong> 力矩 (Torque about Z)</small>
+    </button>
+
+    <div id="status-box">
+        状态：等待操作...<br>
+        L (黄) 沿 X 轴稳定旋转
+    </div>
+
+    <button class="btn-reset" onclick="window.resetSim()">重置位置</button>
+</div>
+
+<script>
+// 使用 IIFE (立即执行函数) 并添加前置分号，确保作用域完全隔离
+;(function() {
+    // 检查 THREE 是否加载
+    if (typeof THREE === 'undefined') {
+        console.error("Three.js not loaded");
+        return;
+    }
+
+    // --- 1. Scene Setup ---
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x1e1e1e);
+    
+    const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 100);
+    camera.position.set(-8, -8, -8); 
+    
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    
+    // 清除旧的 canvas (如果存在)
+    const oldCanvas = document.querySelector('canvas');
+    if (oldCanvas) oldCanvas.remove();
+    document.body.appendChild(renderer.domElement);
+
+    const controls = new THREE.OrbitControls(camera, renderer.domElement);
+    
+    // --- 2. Building the GNC NED World ---
+    const worldGroup = new THREE.Group();
+    scene.add(worldGroup);
+
+    // Rotate worldGroup for NED visualization (X:-90deg)
+    worldGroup.rotation.x = -Math.PI / 2;
+    
+    // --- 3. Visual Helpers (Axes) ---
+    function createAxis(dir, color, label) {
+        const len = 5;
+        const arrow = new THREE.ArrowHelper(dir, new THREE.Vector3(0,0,0), len, color, 0.5, 0.3);
+        worldGroup.add(arrow);
+        
+        const canvas = document.createElement('canvas');
+        canvas.width = 128; canvas.height = 64;
+        const ctx = canvas.getContext('2d');
+        ctx.font = 'bold 40px Arial';
+        ctx.fillStyle = '#' + color.getHexString();
+        ctx.fillText(label, 0, 48);
+        const tex = new THREE.CanvasTexture(canvas);
+        const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex }));
+        sprite.position.copy(dir).multiplyScalar(len + 0.5);
+        sprite.scale.set(2, 1, 1);
+        worldGroup.add(sprite);
+    }
+
+    createAxis(new THREE.Vector3(1, 0, 0), new THREE.Color(0xff5252), "X (北)");
+    createAxis(new THREE.Vector3(0, 1, 0), new THREE.Color(0x00e676), "Y (东)");
+    createAxis(new THREE.Vector3(0, 0, 1), new THREE.Color(0x4facfe), "Z (下)");
+
+    const grid = new THREE.GridHelper(20, 20, 0x333333, 0x111111);
+    grid.rotation.x = Math.PI / 2; 
+    worldGroup.add(grid);
+
+    // --- 4. The Gyroscope (Wheel) ---
+    const wheelGroup = new THREE.Group();
+    worldGroup.add(wheelGroup);
+
+    const wheelGeo = new THREE.Group();
+    wheelGroup.add(wheelGeo);
+    
+    // Rim
+    const rim = new THREE.Mesh(
+        new THREE.TorusGeometry(1.5, 0.2, 16, 50),
+        new THREE.MeshBasicMaterial({ color: 0x888888 })
+    );
+    rim.rotation.y = Math.PI / 2; 
+    wheelGeo.add(rim);
+    
+    // Axle
+    const axle = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.1, 0.1, 5, 8),
+        new THREE.MeshBasicMaterial({ color: 0xaaaaaa })
+    );
+    axle.rotation.z = Math.PI / 2; 
+    wheelGeo.add(axle);
+
+    // L Vector (Yellow) - Renamed to avoid conflicts
+    const arrowL = new THREE.ArrowHelper(
+        new THREE.Vector3(1,0,0), new THREE.Vector3(0,0,0), 4, 0xffff00, 0.6, 0.4
+    );
+    worldGroup.add(arrowL);
+
+    // Force Vector (White)
+    const arrowF = new THREE.ArrowHelper(
+        new THREE.Vector3(0,-1,0), new THREE.Vector3(2.5,0,0), 2, 0xffffff, 0.5, 0.3
+    );
+    arrowF.visible = false;
+    wheelGroup.add(arrowF);
+    
+    // Torque Vector (Blue)
+    const arrowT = new THREE.ArrowHelper(
+        new THREE.Vector3(0,0,-1), new THREE.Vector3(0,0,0), 3, 0x4facfe, 0.5, 0.3
+    );
+    arrowT.visible = false;
+    worldGroup.add(arrowT);
+
+
+    // --- 5. Physics Logic ---
+    // 使用新的变量名以避免与旧环境中的 'L' 或 'torque' 冲突
+    let gyroMomentum = new THREE.Vector3(4, 0, 0); 
+    let appliedTorque = new THREE.Vector3(0, 0, 0);
+    const timeStep = 0.02;
+
+    // 将函数绑定到 window 以便 HTML 按钮调用
+    window.applyForce = function(dir) {
+        if(dir === 'left') {
+            appliedTorque.set(0, 0, -1.5); 
+            
+            arrowF.visible = true;
+            arrowT.visible = true;
+            arrowT.setDirection(new THREE.Vector3(0,0,-1));
+            
+            // Torque = r x F = X x (-Y) = -Z
+            const statusBox = document.getElementById('status-box');
+            if (statusBox) {
+                statusBox.innerHTML = `
+                    1. 施力：沿 -Y (向左)<br>
+                    2. 力矩：<span class="highlight-axis">绕 Z 轴</span> (方向 -Z/向上)<br>
+                    3. 结果：L 追逐 Z 轴力矩 $\\to$ <strong>机头抬起</strong>
+                `;
+            }
+        }
+    };
+
+    window.resetForce = function() {
+        appliedTorque.set(0,0,0);
+        arrowF.visible = false;
+        arrowT.visible = false;
+        const box = document.getElementById('status-box');
+        if(box) box.innerHTML = "状态：操作结束，L 保持新方向";
+    };
+
+    window.resetSim = function() {
+        gyroMomentum.set(4, 0, 0);
+        wheelGroup.rotation.set(0,0,0);
+        wheelGeo.rotation.x = 0;
+        window.resetForce();
+        const box = document.getElementById('status-box');
+        if(box) box.innerHTML = "状态：重置完成";
+    };
+
+    // --- 6. Animation Loop ---
+    function animate() {
+        requestAnimationFrame(animate);
+
+        if (appliedTorque.lengthSq() > 0) {
+            gyroMomentum.add(appliedTorque.clone().multiplyScalar(timeStep));
+            gyroMomentum.setLength(4); 
+        }
+
+        arrowL.setDirection(gyroMomentum.clone().normalize());
+
+        const targetQ = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(1,0,0), gyroMomentum.clone().normalize());
+        wheelGroup.setRotationFromQuaternion(targetQ);
+
+        wheelGeo.rotation.x -= 0.2;
+
+        renderer.render(scene, camera);
+    }
+    
+    controls.object.position.set(-6, -6, -6);
+    controls.target.set(0,0,0);
+    controls.update();
+
+    animate();
+})();
+</script>
+</body>
+</html>

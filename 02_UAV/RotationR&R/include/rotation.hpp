@@ -2,6 +2,9 @@
 #include <Eigen/Dense>
 #include <Eigen/Geometry>
 
+
+static double deg2rad(double deg) { return deg * M_PI / 180.0; }
+
 namespace gnc
 {
     // Euler angles are roll(phi), pitch(theta), yaw(psi), with ZYX order:
@@ -19,8 +22,19 @@ namespace gnc
     // Normalize quaternion
     Eigen::Quaterniond normalizeQuat(const Eigen::Quaterniond &q);
 
-    // validation merics
-    double orthogonalityError(const Eigen::Matrix3d &R);  //||R^T*R - I||_inf
-    double detError(const Eigen::Matrix3d& R); // |det(R) - 1|
-    double rotationDiff(const Eigen::Matrix3d& A, const Eigen::Matrix3d& B); //||A-B||_inf
+    Eigen::Quaterniond integrateQuatBodyRate(
+        const Eigen::Quaterniond &q_bn,
+        const Eigen::Vector3d &omega_b,
+        double dt);
+
+    Eigen::Vector3d eulerRatesToBodyOmegaZYX(
+        double roll, double pitch,
+        const Eigen::Vector3d &euler_dot);
+
+    bool bodyOmegaToEulerRatesZYX(
+        double roll, double pitch,
+        const Eigen::Vector3d &omega_b,
+        Eigen::Vector3d *euler_dot_out);
+
+
 }

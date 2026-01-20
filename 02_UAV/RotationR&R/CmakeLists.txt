@@ -7,10 +7,25 @@
 
 add_executable(RotationR_R 
     include/rotation.hpp
+    include/kinematics.hpp
+    include/validation.hpp
+    include/dynamics.hpp
+    include/motor_model.hpp
+    include/quad_mixer.hpp
+    include/pid.hpp
+    include/cascade_controller.hpp
 
     src/rotation.cpp
     src/main.cpp
+    src/kinematics.cpp
+    src/validation.cpp
+    src/dynamics.cpp
+    src/motor_model.cpp
+    src/quad_mixer.cpp
+    src/pid.cpp
+    src/cascade_controller.cpp
 )
+
 
 
 # 2. 定义可执行文件
