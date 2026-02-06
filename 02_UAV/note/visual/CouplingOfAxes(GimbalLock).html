@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>万向节锁可视化 (Gimbal Lock)</title>
+    <!-- 使用 unpkg 统一加载源以确保版本兼容性 -->
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #111; font-family: 'Segoe UI', sans-serif; color: white; }
+        
+        #ui-container {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            width: 340px;
+            background: rgba(0, 0, 0, 0.85);
+            padding: 20px;
+            border-radius: 12px;
+            border: 1px solid #444;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.6);
+            backdrop-filter: blur(5px);
+        }
+
+        h1 { margin: 0 0 15px 0; font-size: 18px; color: #ff9800; border-bottom: 1px solid #555; padding-bottom: 10px; }
+        
+        .control-group { margin-bottom: 15px; }
+        .label-row { display: flex; justify-content: space-between; margin-bottom: 5px; font-size: 14px; font-weight: bold; }
+        .value-display { font-family: monospace; opacity: 0.8; }
+        
+        input[type=range] { width: 100%; cursor: pointer; accent-color: #666; margin: 5px 0; }
+        input[type=range].slider-z { accent-color: #2196f3; }
+        input[type=range].slider-y { accent-color: #4caf50; }
+        input[type=range].slider-x { accent-color: #f44336; }
+
+        .btn-lock {
+            width: 100%;
+            padding: 12px;
+            background: linear-gradient(135deg, #ff5252, #d32f2f);
+            border: none;
+            border-radius: 6px;
+            color: white;
+            font-weight: bold;
+            cursor: pointer;
+            margin-top: 10px;
+            box-shadow: 0 4px 0 #b71c1c;
+            transition: transform 0.1s;
+        }
+        .btn-lock:active { transform: translateY(2px); box-shadow: 0 2px 0 #b71c1c; }
+
+        .btn-reset {
+            width: 100%; padding: 8px; margin-top: 10px;
+            background: #444; border: 1px solid #666; color: #ccc; border-radius: 4px; cursor: pointer;
+        }
+        .btn-reset:hover { background: #555; color: white; }
+
+        .status-msg {
+            margin-top: 15px; padding: 10px;
+            background: #222; border-left: 4px solid #666;
+            font-size: 13px; color: #aaa; line-height: 1.4;
+            min-height: 40px; transition: all 0.3s;
+        }
+        
+        .lock-active { border-left-color: #ff5252; color: #ffcdd2; background: rgba(255, 82, 82, 0.1); }
+        .lock-warning { font-weight: bold; color: #ff5252; }
+
+    </style>
+</head>
+<body>
+
+<div id="ui-container">
+    <h1>三轴万向节 (Z-Y-X)</h1>
+    
+    <!-- Outer: Z -->
+    <div class="control-group">
+        <div class="label-row" style="color:#4facfe">
+            <span>1. 外环 (Yaw/Z)</span>
+            <span id="val-z">0°</span>
+        </div>
+        <input type="range" class="slider-z" id="slider-z" min="-180" max="180" value="0">
+    </div>
+
+    <!-- Middle: Y -->
+    <div class="control-group">
+        <div class="label-row" style="color:#00e676">
+            <span>2. 中环 (Pitch/Y)</span>
+            <span id="val-y">0°</span>
+        </div>
+        <input type="range" class="slider-y" id="slider-y" min="-90" max="90" value="0">
+    </div>
+
+    <!-- Inner: X -->
+    <div class="control-group">
+        <div class="label-row" style="color:#ff5252">
+            <span>3. 内环 (Roll/X)</span>
+            <span id="val-x">0°</span>
+        </div>
+        <input type="range" class="slider-x" id="slider-x" min="-180" max="180" value="0">
+    </div>
+
+    <button class="btn-lock" onclick="window.triggerLock()">🔒 触发万向节锁 (Pitch=90°)</button>
+    
+    <div id="status-box" class="status-msg">
+        状态：自由旋转<br>
+        三个轴向独立，无耦合。
+    </div>
+
+    <button class="btn-reset" onclick="window.resetAngles()">重置 (Reset)</button>
+</div>
+
+<script>
+(function() {
+    // 检查 THREE 是否加载
+    if (typeof THREE === 'undefined') {
+        console.error("Three.js not loaded");
+        return;
+    }
+
+    // --- 1. Scene Setup ---
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x111111);
+    
+    // Z-Up Setup
+    const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 1000);
+    camera.position.set(15, -15, 10);
+    camera.up.set(0, 0, 1);
+    
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    
+    // 清除旧的 canvas
+    const oldCanvas = document.querySelector('canvas');
+    if (oldCanvas) oldCanvas.remove();
+    document.body.appendChild(renderer.domElement);
+
+    const controls = new THREE.OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+
+    // Lights
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
+    scene.add(ambientLight);
+    const dirLight = new THREE.DirectionalLight(0xffffff, 1);
+    dirLight.position.set(10, -10, 20);
+    scene.add(dirLight);
+
+    // Grid
+    const grid = new THREE.GridHelper(30, 30, 0x333333, 0x111111);
+    grid.rotation.x = Math.PI / 2;
+    scene.add(grid);
+
+    // --- 2. Gimbal Hierarchy ---
+    // Structure: World -> YawGimbal (Z) -> PitchGimbal (Y) -> RollGimbal (X) -> Object
+    
+    // 2.1 Outer Ring (Yaw/Z) - Blue
+    const yawGroup = new THREE.Group();
+    scene.add(yawGroup);
+
+    const yawRingGeo = new THREE.TorusGeometry(6, 0.2, 16, 100);
+    const yawMat = new THREE.MeshPhongMaterial({ color: 0x2196f3, shininess: 100 });
+    const yawRing = new THREE.Mesh(yawRingGeo, yawMat);
+    yawGroup.add(yawRing);
+
+    // Axis Helper (Blue Line)
+    const axisZ = new THREE.ArrowHelper(new THREE.Vector3(0,0,1), new THREE.Vector3(0,0,0), 8, 0x2196f3, 0.5, 0.3);
+    scene.add(axisZ); // Fixed to world
+
+
+    // 2.2 Middle Ring (Pitch/Y) - Green
+    const pitchGroup = new THREE.Group();
+    yawGroup.add(pitchGroup); // Attached to Yaw
+
+    const pitchRingGeo = new THREE.TorusGeometry(5, 0.2, 16, 100);
+    const pitchMat = new THREE.MeshPhongMaterial({ color: 0x4caf50, shininess: 100 });
+    const pitchRing = new THREE.Mesh(pitchRingGeo, pitchMat);
+    pitchRing.rotation.x = Math.PI / 2; 
+    pitchGroup.add(pitchRing);
+
+    // Axis Helper (Green Line) - Moves with Yaw
+    const axisY = new THREE.ArrowHelper(new THREE.Vector3(0,1,0), new THREE.Vector3(0,0,0), 7, 0x4caf50, 0.5, 0.3);
+    yawGroup.add(axisY);
+
+
+    // 2.3 Inner Ring (Roll/X) - Red
+    const rollGroup = new THREE.Group();
+    pitchGroup.add(rollGroup); // Attached to Pitch
+
+    const rollRingGeo = new THREE.TorusGeometry(4, 0.2, 16, 100);
+    const rollMat = new THREE.MeshPhongMaterial({ color: 0xf44336, shininess: 100 });
+    const rollRing = new THREE.Mesh(rollRingGeo, rollMat);
+    rollRing.rotation.y = Math.PI / 2;
+    rollGroup.add(rollRing);
+
+    // Axis Helper (Red Line) - Moves with Pitch
+    const axisX = new THREE.ArrowHelper(new THREE.Vector3(1,0,0), new THREE.Vector3(0,0,0), 6, 0xf44336, 0.5, 0.3);
+    pitchGroup.add(axisX);
+
+
+    // 2.4 The Object (Airplane)
+    const planeGroup = new THREE.Group();
+    rollGroup.add(planeGroup); // Attached to Roll
+
+    // Simple Plane Mesh
+    const fuseGeo = new THREE.ConeGeometry(0.5, 3, 16);
+    fuseGeo.rotateZ(-Math.PI/2); // Point X
+    const fuse = new THREE.Mesh(fuseGeo, new THREE.MeshStandardMaterial({color: 0xddd}));
+    planeGroup.add(fuse);
+
+    const wingGeo = new THREE.BoxGeometry(1.5, 5, 0.1);
+    const wing = new THREE.Mesh(wingGeo, new THREE.MeshStandardMaterial({color: 0xbbb}));
+    planeGroup.add(wing);
+
+    const tailGeo = new THREE.BoxGeometry(1, 2, 0.1);
+    tailGeo.translate(-1.2, 0, 0.5); // Back and up
+    const tailMat = new THREE.MeshStandardMaterial({color: 0x999});
+    const tail = new THREE.Mesh(tailGeo, tailMat);
+    // Make tail vertical
+    const tailV = new THREE.Mesh(new THREE.BoxGeometry(1, 0.1, 1.5), tailMat);
+    tailV.position.set(-1.2, 0, 0.5);
+    planeGroup.add(tailV);
+
+
+    // --- 3. Logic ---
+    const sliderZ = document.getElementById('slider-z');
+    const sliderY = document.getElementById('slider-y');
+    const sliderX = document.getElementById('slider-x');
+    const valZ = document.getElementById('val-z');
+    const valY = document.getElementById('val-y');
+    const valX = document.getElementById('val-x');
+    const statusBox = document.getElementById('status-box');
+
+    function updateRotations() {
+        const z = parseFloat(sliderZ.value);
+        const y = parseFloat(sliderY.value);
+        const x = parseFloat(sliderX.value);
+
+        valZ.innerText = z + "°";
+        valY.innerText = y + "°";
+        valX.innerText = x + "°";
+
+        // Apply Rotations to Hierarchy
+        // 1. Outer Ring (Yaw) rotates around world Z
+        yawGroup.rotation.z = z * Math.PI / 180;
+
+        // 2. Middle Ring (Pitch) rotates around local Y
+        pitchGroup.rotation.y = y * Math.PI / 180;
+
+        // 3. Inner Ring (Roll) rotates around local X
+        rollGroup.rotation.x = x * Math.PI / 180;
+
+        // Check Gimbal Lock
+        checkLock(y);
+    }
+
+    function checkLock(pitchDeg) {
+        // Lock happens at +/- 90 degrees Pitch
+        if (Math.abs(pitchDeg) >= 89) {
+            statusBox.innerHTML = `
+                <span class="lock-warning">⚠️ 万向节锁死 (GIMBAL LOCK)</span><br>
+                注意看：<span style="color:#ff5252">红轴 (X)</span> 与 <span style="color:#2196f3">蓝轴 (Z)</span> 重合了！<br>
+                现在转动 外环(Z) 和 内环(X)，效果是一样的。
+            `;
+            statusBox.classList.add('lock-active');
+        } else {
+            statusBox.innerHTML = "状态：自由旋转<br>三个轴向独立，无耦合。";
+            statusBox.classList.remove('lock-active');
+        }
+    }
+
+    // Bind to window for HTML access
+    window.triggerLock = function() {
+        sliderZ.value = 0;
+        sliderX.value = 0;
+        sliderY.value = 90;
+        updateRotations();
+    };
+
+    window.resetAngles = function() {
+        sliderZ.value = 0;
+        sliderY.value = 0;
+        sliderX.value = 0;
+        updateRotations();
+    };
+
+    sliderZ.addEventListener('input', updateRotations);
+    sliderY.addEventListener('input', updateRotations);
+    sliderX.addEventListener('input', updateRotations);
+
+    // --- 4. Animation ---
+    function animate() {
+        requestAnimationFrame(animate);
+        controls.update();
+        renderer.render(scene, camera);
+    }
+
+    animate();
+    
+    // Resize
+    window.addEventListener('resize', () => {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+})();
+</script>
+</body>
+</html>

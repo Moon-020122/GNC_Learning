@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>罗德里格斯公式 3D 几何分解</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #1e1e1e; font-family: 'Segoe UI', sans-serif; color: white; }
+        
+        #ui-panel {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            width: 320px;
+            background: rgba(0, 0, 0, 0.9);
+            border: 1px solid #444;
+            border-radius: 12px;
+            padding: 20px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+        }
+
+        h2 { margin: 0 0 15px 0; font-size: 18px; color: #ffd700; border-bottom: 1px solid #555; padding-bottom: 10px; }
+
+        .control-group { margin-bottom: 15px; }
+        .label-row { display: flex; justify-content: space-between; margin-bottom: 5px; font-size: 14px; color: #ccc; }
+        input[type=range] { width: 100%; cursor: pointer; accent-color: #ffd700; }
+
+        .legend {
+            font-size: 12px; margin-top: 15px; border-top: 1px solid #444; padding-top: 10px;
+            display: flex; flex-direction: column; gap: 8px;
+        }
+        .legend-item { display: flex; align-items: center; }
+        .color-box { width: 12px; height: 12px; margin-right: 8px; border-radius: 2px; }
+        
+        /* Colors matching the visualization */
+        .c-u { background: #00e676; }
+        .c-v { background: #4facfe; }
+        .c-cross { background: #9c27b0; }
+        .c-trim { background: #ff5252; }
+        .c-twist { background: #00e676; } /* Reusing green for consistency with previous 2D */
+        .c-res { background: #ffd700; }
+
+        .desc { font-size: 11px; color: #888; margin-left: 20px; margin-top: 2px; }
+    </style>
+</head>
+<body>
+
+<div id="ui-panel">
+    <h2>罗德里格斯公式 (3D分解)</h2>
+    
+    <div class="control-group">
+        <div class="label-row">
+            <span>旋转角度 θ</span>
+            <span id="val-theta" style="color:#ffd700; font-weight:bold;">45°</span>
+        </div>
+        <input type="range" id="slider-theta" min="0" max="180" value="45">
+    </div>
+
+    <div class="legend">
+        <div class="legend-item"><div class="color-box c-u"></div>轴 u (大拇指/上)</div>
+        
+        <div class="legend-item"><div class="color-box c-v"></div>第1项: v (食指/12点)</div>
+        <div class="desc">原始向量，指向前方 (-Z)</div>
+
+        <div class="legend-item"><div class="color-box c-cross"></div>方向基准: u × v (中指/9点)</div>
+        <div class="desc">指向左方 (-X)，用于定方向</div>
+
+        <div class="legend-item"><div class="color-box c-trim"></div>第3项: 修剪 (红虚线)</div>
+        <div class="desc">公式: (1-cosθ) u×(u×v)<br>作用: 把长度从 1 削减到 cosθ</div>
+
+        <div class="legend-item"><div class="color-box c-twist"></div>第2项: 横拉 (绿虚线)</div>
+        <div class="desc">公式: sinθ (u×v)<br>作用: 往9点钟方向拉 sinθ</div>
+        
+        <div class="legend-item"><div class="color-box c-res"></div>结果: v_new (金箭)</div>
+    </div>
+</div>
+
+<script>
+(function() {
+    // 检查 THREE 是否加载
+    if (typeof THREE === 'undefined') {
+        console.error("Three.js not loaded");
+        return;
+    }
+
+    // --- 1. Scene Setup ---
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x111111);
+    
+    // Camera
+    const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 100);
+    camera.position.set(5, 6, 8); 
+    camera.lookAt(0, 0, 0);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    
+    // 清除旧的 canvas (防止重复运行堆叠)
+    const oldCanvas = document.querySelector('canvas');
+    if (oldCanvas) oldCanvas.remove();
+    document.body.appendChild(renderer.domElement);
+
+    const controls = new THREE.OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+
+    // Lights
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+    scene.add(ambientLight);
+    const dirLight = new THREE.DirectionalLight(0xffffff, 1);
+    dirLight.position.set(5, 10, 5);
+    scene.add(dirLight);
+
+    // Grid (XZ Plane)
+    const grid = new THREE.GridHelper(10, 10, 0x444444, 0x222222);
+    scene.add(grid);
+
+    // --- 2. Geometry Helpers ---
+    
+    function createArrow(dir, origin, length, color, headScale=1) {
+        return new THREE.ArrowHelper(dir.clone().normalize(), origin, length, color, 0.4 * headScale, 0.2 * headScale);
+    }
+
+    function createLabel(text, pos, color) {
+        const canvas = document.createElement('canvas');
+        canvas.width = 256; canvas.height = 64;
+        const ctx = canvas.getContext('2d');
+        ctx.font = 'bold 36px Arial';
+        ctx.fillStyle = '#' + color.getHexString();
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillText(text, 128, 32);
+        
+        const tex = new THREE.CanvasTexture(canvas);
+        const mat = new THREE.SpriteMaterial({ map: tex, transparent: true });
+        const sprite = new THREE.Sprite(mat);
+        sprite.position.copy(pos);
+        sprite.scale.set(2, 0.5, 1);
+        return sprite;
+    }
+
+    // --- 3. Key Vectors Setup ---
+    
+    // Axis u (Thumb): UP (+Y)
+    const u = new THREE.Vector3(0, 1, 0);
+    const arrowU = createArrow(u, new THREE.Vector3(0,0,0), 3, 0x00e676);
+    scene.add(arrowU);
+    scene.add(createLabel("u (轴)", new THREE.Vector3(0, 3.5, 0), new THREE.Color(0x00e676)));
+
+    // Vector v (Index): FORWARD (Z-)
+    const vLen = 4;
+    const vBase = new THREE.Vector3(0, 0, -1); 
+    
+    // Term 1: v (The raw material)
+    const arrowV = createArrow(vBase, new THREE.Vector3(0,0,0), vLen, 0x4facfe);
+    scene.add(arrowV);
+    scene.add(createLabel("v (12点)", new THREE.Vector3(0, 0, -4.5), new THREE.Color(0x4facfe)));
+
+    // Cross Product Reference: u x v (Middle Finger) -> Left (-X)
+    const wBase = new THREE.Vector3().crossVectors(u, vBase); // (-1, 0, 0)
+    const arrowW = createArrow(wBase, new THREE.Vector3(0,0,0), 2, 0x9c27b0);
+    scene.add(arrowW);
+    scene.add(createLabel("u×v (9点)", new THREE.Vector3(-2.5, 0, 0), new THREE.Color(0x9c27b0)));
+
+    // Dynamic Elements Group
+    const dynGroup = new THREE.Group();
+    scene.add(dynGroup);
+
+    // --- 4. Logic & Update ---
+    
+    const slider = document.getElementById('slider-theta');
+    const valTheta = document.getElementById('val-theta');
+
+    function update() {
+        const deg = parseFloat(slider.value);
+        valTheta.innerText = deg + "°";
+        const rad = deg * Math.PI / 180;
+
+        // Clear dynamic elements
+        while(dynGroup.children.length > 0){ 
+            const obj = dynGroup.children[0];
+            if(obj.geometry) obj.geometry.dispose();
+            if(obj.material) obj.material.dispose();
+            dynGroup.remove(obj); 
+        }
+
+        // Calculate Terms
+        // Term 1: v
+        const p1 = vBase.clone().multiplyScalar(vLen); // Tip of Blue Arrow
+
+        // Term 3: (1-cos) * u x (u x v) = (1-cos) * (u x w)
+        const trimDir = new THREE.Vector3().crossVectors(u, wBase); // +Z
+        const trimLen = vLen * (1 - Math.cos(rad));
+        
+        const p2 = p1.clone().add(trimDir.clone().multiplyScalar(trimLen)); // Tip after trim
+
+        // Visual: Red Dashed Arrow for Trim
+        if (trimLen > 0.1) {
+            const arrowTrim = createArrow(trimDir, p1, trimLen, 0xff5252, 0.8);
+            dynGroup.add(arrowTrim);
+        }
+
+        // Term 2: sin * (u x v) = sin * w
+        // Moves Left (-X)
+        const twistDir = wBase.clone();
+        const twistLen = vLen * Math.sin(rad);
+        
+        const p3 = p2.clone().add(twistDir.clone().multiplyScalar(twistLen)); // Final Tip
+
+        // Visual: Green Dashed Arrow for Twist
+        if (twistLen > 0.1) {
+            const arrowTwist = createArrow(twistDir, p2, twistLen, 0x00e676, 0.8);
+            dynGroup.add(arrowTwist);
+        }
+
+        // Final Result: v_new (Gold)
+        // Origin to p3
+        const arrowRes = createArrow(p3.clone().normalize(), new THREE.Vector3(0,0,0), vLen, 0xffd700);
+        dynGroup.add(arrowRes);
+
+        // Arc for visual angle
+        if (deg > 5) {
+            // We need to map 2D arc to 3D XZ plane.
+            // Start at -Z (-90 deg in standard circle terms?), Rotate CCW
+            // Let's just generate points manually
+            const points = [];
+            for(let i=0; i<=20; i++) {
+                const a = i/20 * rad;
+                // v is at -Z. Rotation is towards -X.
+                // x = -sin(a), z = -cos(a)
+                points.push(new THREE.Vector3(-Math.sin(a)*vLen*0.8, 0, -Math.cos(a)*vLen*0.8));
+            }
+            const arcGeo = new THREE.BufferGeometry().setFromPoints(points);
+            const arcLine = new THREE.Line(arcGeo, new THREE.LineBasicMaterial({ color: 0x666666 }));
+            dynGroup.add(arcLine);
+        }
+    }
+
+    slider.addEventListener('input', update);
+    update();
+
+    // Animation Loop
+    function animate() {
+        requestAnimationFrame(animate);
+        controls.update();
+        renderer.render(scene, camera);
+    }
+    animate();
+
+    // Resize
+    window.addEventListener('resize', () => {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+})();
+</script>
+</body>
+</html>

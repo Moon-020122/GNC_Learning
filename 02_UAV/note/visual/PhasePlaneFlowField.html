@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PD控制相平面可视化 (Phase Portrait)</title>
+    <style>
+        body {
+            margin: 0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            background-color: #1e1e1e;
+            color: white;
+            font-family: 'Segoe UI', sans-serif;
+            overflow: hidden;
+        }
+
+        .container {
+            position: relative;
+            background: #252525;
+            padding: 20px;
+            border-radius: 12px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.6);
+            display: flex;
+            gap: 20px;
+        }
+
+        canvas {
+            background: #111;
+            border-radius: 8px;
+            border: 1px solid #333;
+            cursor: crosshair;
+        }
+
+        .sidebar {
+            width: 280px;
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+
+        h2 { margin: 0 0 10px 0; color: #4facfe; font-size: 18px; border-bottom: 1px solid #444; padding-bottom: 8px; }
+
+        .control-group {
+            background: rgba(255,255,255,0.05);
+            padding: 10px;
+            border-radius: 6px;
+        }
+
+        .label-row {
+            display: flex;
+            justify-content: space-between;
+            font-size: 14px;
+            color: #ccc;
+            margin-bottom: 5px;
+        }
+
+        input[type=range] {
+            width: 100%;
+            cursor: pointer;
+            accent-color: #4facfe;
+        }
+
+        .legend {
+            margin-top: auto;
+            font-size: 12px;
+            color: #888;
+            line-height: 1.6;
+        }
+        
+        .highlight { color: #ffd700; font-weight: bold; }
+        .math { font-family: 'Times New Roman', serif; font-style: italic; }
+
+        button {
+            padding: 10px;
+            background: #4facfe;
+            border: none;
+            border-radius: 4px;
+            color: #fff;
+            font-weight: bold;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        button:hover { background: #007bff; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <canvas id="phaseCanvas" width="600" height="600"></canvas>
+    
+    <div class="sidebar">
+        <h2>PD 控制器参数</h2>
+        
+        <div class="control-group">
+            <div class="label-row">
+                <span>P (刚度/向心力)</span>
+                <span id="val-kp">1.0</span>
+            </div>
+            <input type="range" id="slider-kp" min="0" max="5" step="0.1" value="1.0">
+            <div style="font-size:11px; color:#666;">越强越想归零位置 ($e_R \to 0$)</div>
+        </div>
+
+        <div class="control-group">
+            <div class="label-row">
+                <span>D (阻尼/摩擦力)</span>
+                <span id="val-kd">0.5</span>
+            </div>
+            <input type="range" id="slider-kd" min="0" max="2" step="0.1" value="0.5">
+            <div style="font-size:11px; color:#666;">越强越想归零速度 ($e_\omega \to 0$)</div>
+        </div>
+
+        <button onclick="resetSimulation()">重置状态点 (Reset)</button>
+
+        <div class="legend">
+            <strong>图解说明：</strong><br>
+            <span style="color:#ff5252">X 轴</span>: 位置误差 $e_R$<br>
+            <span style="color:#00e676">Y 轴</span>: 速度误差 $e_\omega$<br>
+            <br>
+            <strong>流场规则：</strong><br>
+            1. 上半区 ($e_\omega > 0$) 必须向右流<br>
+            2. 下半区 ($e_\omega < 0$) 必须向左流<br>
+            3. 这导致了<span class="highlight">螺旋 (Spiral)</span> 形状。
+        </div>
+    </div>
+</div>
+
+<script>
+    const canvas = document.getElementById('phaseCanvas');
+    const ctx = canvas.getContext('2d');
+    
+    // Config
+    const width = canvas.width;
+    const height = canvas.height;
+    const cx = width / 2;
+    const cy = height / 2;
+    const scale = 40; // Pixels per unit
+
+    // Physics Parameters
+    let kp = 1.0;
+    let kd = 0.5;
+    
+    // State
+    let state = {
+        x: 5,  // Position error
+        v: 2   // Velocity error
+    };
+    
+    let trail = [];
+    const maxTrail = 500;
+
+    // Inputs
+    const sKp = document.getElementById('slider-kp');
+    const sKd = document.getElementById('slider-kd');
+    const vKp = document.getElementById('val-kp');
+    const vKd = document.getElementById('val-kd');
+
+    function updateParams() {
+        kp = parseFloat(sKp.value);
+        kd = parseFloat(sKd.value);
+        vKp.innerText = kp.toFixed(1);
+        vKd.innerText = kd.toFixed(1);
+    }
+
+    sKp.addEventListener('input', updateParams);
+    sKd.addEventListener('input', updateParams);
+
+    function resetSimulation() {
+        state = { x: 5, v: 4 }; // Start somewhere interesting
+        trail = [];
+    }
+
+    function drawArrow(x, y, dx, dy, color, lenScale=10) {
+        const mag = Math.sqrt(dx*dx + dy*dy);
+        if (mag < 0.001) return;
+        
+        // Normalize and scale for visual consistency in grid
+        const visualLen = Math.min(mag * 5, 20); 
+        const nx = dx / mag;
+        const ny = dy / mag;
+
+        const x1 = x;
+        const y1 = y;
+        const x2 = x + nx * visualLen;
+        const y2 = y + ny * visualLen;
+
+        ctx.beginPath();
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 1;
+        ctx.moveTo(x1, y1);
+        ctx.lineTo(x2, y2);
+        ctx.stroke();
+
+        // Arrow head
+        const headLen = 3;
+        const angle = Math.atan2(ny, nx);
+        ctx.beginPath();
+        ctx.moveTo(x2, y2);
+        ctx.lineTo(x2 - headLen * Math.cos(angle - Math.PI/6), y2 - headLen * Math.sin(angle - Math.PI/6));
+        ctx.lineTo(x2 - headLen * Math.cos(angle + Math.PI/6), y2 - headLen * Math.sin(angle + Math.PI/6));
+        ctx.fillStyle = color;
+        ctx.fill();
+    }
+
+    function drawGrid() {
+        // Draw Field Vectors
+        const step = 40;
+        for(let py = 0; py <= height; py += step) {
+            for(let px = 0; px <= width; px += step) {
+                // Convert screen to world coords
+                const worldX = (px - cx) / scale;
+                const worldV = -(py - cy) / scale; // Canvas Y is inverted
+
+                // Calculate derivative
+                // dx/dt = v
+                // dv/dt = -kp*x - kd*v (Acceleration command)
+                const dx_dt = worldV;
+                const dv_dt = -kp * worldX - kd * worldV;
+
+                // Map vector back to screen space for drawing
+                // dx on screen = dx_dt * scale
+                // dy on screen = -dv_dt * scale (invert Y)
+                
+                // Color based on region
+                let col = '#444';
+                if (Math.abs(worldX) < 0.2 && Math.abs(worldV) < 0.2) col = '#666';
+
+                drawArrow(px, py, dx_dt, -dv_dt, col);
+            }
+        }
+
+        // Draw Axes
+        ctx.strokeStyle = '#666';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(0, cy); ctx.lineTo(width, cy); // X axis (e_R)
+        ctx.moveTo(cx, 0); ctx.lineTo(cx, height); // Y axis (e_omega)
+        ctx.stroke();
+
+        // Labels
+        ctx.fillStyle = '#ff5252';
+        ctx.font = '14px Arial';
+        ctx.fillText("位置误差 e_R (+)", width - 100, cy + 20);
+        ctx.fillStyle = '#00e676';
+        ctx.fillText("速度误差 e_ω (+)", cx + 10, 20);
+        
+        // Quadrant Logic Text
+        ctx.font = '12px Arial';
+        ctx.fillStyle = 'rgba(255,255,255,0.3)';
+        ctx.fillText("速度>0 → 位置增加 (向右)", cx + 20, cy - 20);
+        ctx.fillText("速度<0 → 位置减小 (向左)", cx - 150, cy + 20);
+    }
+
+    function animate() {
+        ctx.clearRect(0, 0, width, height);
+        
+        drawGrid();
+
+        // Physics Update
+        const dt = 0.016; // 60fps approx
+        // Symplectic Euler or just Euler for viz
+        const accel = -kp * state.x - kd * state.v;
+        state.v += accel * dt;
+        state.x += state.v * dt;
+
+        // Add to trail
+        // Map to screen
+        const sx = cx + state.x * scale;
+        const sy = cy - state.v * scale;
+        
+        trail.push({x: sx, y: sy});
+        if(trail.length > maxTrail) trail.shift();
+
+        // Draw Trail
+        if(trail.length > 1) {
+            ctx.beginPath();
+            ctx.strokeStyle = '#4facfe';
+            ctx.lineWidth = 3;
+            ctx.moveTo(trail[0].x, trail[0].y);
+            for(let i=1; i<trail.length; i++) {
+                ctx.lineTo(trail[i].x, trail[i].y);
+            }
+            ctx.stroke();
+        }
+
+        // Draw Head
+        ctx.beginPath();
+        ctx.fillStyle = '#ffd700';
+        ctx.arc(sx, sy, 6, 0, Math.PI*2);
+        ctx.fill();
+        
+        // Reset if converges too close or flies away
+        if(trail.length > 100 && Math.abs(state.x) < 0.05 && Math.abs(state.v) < 0.05) {
+            // Auto reset loop for mesmerizing effect? Or just stop.
+            // Let's just let it stay at zero
+        }
+
+        requestAnimationFrame(animate);
+    }
+
+    resetSimulation();
+    animate();
+
+</script>
+</body>
+</html>

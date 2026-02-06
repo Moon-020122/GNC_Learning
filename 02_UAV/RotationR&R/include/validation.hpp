@@ -4,6 +4,7 @@
 #include "cascade_controller.hpp"
 #include "quad_mixer.hpp"
 #include "motor_model.hpp"
+#include "geom_att_controller.hpp"
 
 namespace gnc
 {
@@ -39,4 +40,22 @@ namespace gnc
         double dt, double Tsim,
         std::function<gnc::Reference(double)> ref_fn,
         std::function<Eigen::Vector3d(double)> disturbance_acc_n_fn);
+
+    // geometery attitude controller module
+    struct AttMetrics
+    {
+        double max_eR = 0.0;
+        double max_psi = 0.0;
+        double max_omega = 0.0;
+        double max_ortho = 0.0;
+        double max_det = 0.0;
+        double settle_time = -1.0;
+    };
+    static AttMetrics runGeomAttitudeFlipTest(
+        const char *csv_path,
+        gnc::RigidBodyState s,
+        gnc::KinematicsParams plant,
+        const gnc::GeomAttController &gc,
+        double dt, double Tsim,
+        const Eigen::Matrix3d &Rd);
 }

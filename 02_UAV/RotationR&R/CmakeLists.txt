@@ -14,6 +14,8 @@ add_executable(RotationR_R
     include/quad_mixer.hpp
     include/pid.hpp
     include/cascade_controller.hpp
+    include/lie.hpp
+    include/geom_att_controller.hpp
 
     src/rotation.cpp
     src/main.cpp
@@ -24,6 +26,8 @@ add_executable(RotationR_R
     src/quad_mixer.cpp
     src/pid.cpp
     src/cascade_controller.cpp
+    src/lie.cpp
+    src/geom_att_controller.cpp
 )
 
 

@@ -138,10 +138,10 @@ int main()
             r.yaw_des = 0.0;
             return r;
         },
-        [](double t)-> Eigen::Vector3d
+        [](double t) -> Eigen::Vector3d
         {
             // Apply a northward acceleration disturbance for 0-1 seconds, then remove it.
-            if (t < 1.0) 
+            if (t < 1.0)
                 return Eigen::Vector3d(0.8, 0.0, 0.0);
             return Eigen::Vector3d::Zero();
         });
@@ -195,7 +195,60 @@ int main()
         [](double /*t*/)
         { return Eigen::Vector3d::Zero(); });
 
-            return pass
-        ? 0
-        : 1;
+    //  geometry controller
+    gnc::KinematicsParams plant;
+    plant.mass = 1.5;
+    plant.gravity = 9.81;
+    plant.linear_drag = 0.0; // no drag
+
+    plant.rb.I_b = (Eigen::Vector3d(0.02, 0.03, 0.04)).asDiagonal();
+    plant.rb.I_b_inv = plant.rb.I_b.inverse();
+    plant.rb.rotor_J = 0.0;
+    plant.rb.omega_spin_sum = 0.0;
+
+    // ----- Initial state: large maneuver ----
+    gnc::RigidBodyState s0;
+    s0.p_n.setZero();
+    s0.v_n.setZero();
+    // bit tilt
+    const double roll = deg2rad(170.0);
+    const double pitch = deg2rad(60.0);
+    const double yaw = deg2rad(20.0);
+    s0.q_bn = gnc::euluerZYXToQuat(roll, pitch, yaw);
+    s0.omega_b.setZero();
+
+    // Desired attitude: level
+    Eigen::Matrix3d Rd = Eigen::Matrix3d::Identity();
+
+    // ---- Geometric controller ----
+    gnc::GeomAttParams gp;
+    gp.I = plant.rb.I_b;
+    gp.I_inv = plant.rb.I_b_inv;
+    gp.kR = 10.0;
+    gp.kW = 2.0;
+    gp.tau_max = Eigen::Vector3d(1.2, 1.2, 0.6);
+
+    gnc::GeomAttController gc;
+    gc.setParams(gp);
+
+    const double dt = 0.001;
+    const double Tsim = 6.0;
+
+    auto m = runGeomAttitudeFlipTest(
+        "geom_att_flip.csv",
+        s0, plant, gc,
+        dt, Tsim, Rd);
+
+    std::cout << "===== Geom Attitude Flip Metrics =====\n";
+    std::cout << "max ||eR||   = " << m.max_eR << "\n";
+    std::cout << "max Psi      = " << m.max_psi << "\n";
+    std::cout << "max ||omega||= " << m.max_omega << "\n";
+    std::cout << "max orthoErr = " << m.max_ortho << "\n";
+    std::cout << "max detErr   = " << m.max_det << "\n";
+    std::cout << "settle time  = " << m.settle_time << " s\n";
+    std::cout << "CSV written: geom_att_flip.csv\n";
+
+    return pass
+               ? 0
+               : 1;
 }

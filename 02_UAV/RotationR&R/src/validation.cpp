@@ -7,6 +7,8 @@
 // module 4
 #include "motor_model.hpp"
 #include "quad_mixer.hpp"
+// geometery controller
+#include <fstream>
 
 namespace gnc
 {
@@ -331,8 +333,8 @@ namespace gnc
         p.kp_att = Eigen::Vector3d(9.0, 9.0, 5.0);
 
         // ---position PID: p -> v_corr ---
-        p.pos_pid_cfg.kp = Eigen::Vector3d(1.5, 1.5, 1.5);
-        p.pos_pid_cfg.ki = Eigen::Vector3d(0.02, 0.02, 0.02);
+        p.pos_pid_cfg.kp = Eigen::Vector3d(3.0, 3.0, 3.0);
+        p.pos_pid_cfg.ki = Eigen::Vector3d(0.0, 0.0, 0.0);
         p.pos_pid_cfg.kd = Eigen::Vector3d(0.0, 0.0, 0.0);
         p.pos_pid_cfg.u_min = Eigen::Vector3d(-p.v_max, -p.v_max, -p.v_max);
         p.pos_pid_cfg.u_max = Eigen::Vector3d(+p.v_max, +p.v_max, +p.v_max);
@@ -340,12 +342,12 @@ namespace gnc
         p.pos_pid_cfg.i_max = Eigen::Vector3d(+2.0, +2.0, +2.0);
         p.pos_pid_cfg.kaw = Eigen::Vector3d(0.0, 0.0, 0.0);
         p.pos_pid_cfg.d_filter_tau = 0.02;
-        p.pos_pid_cfg.enable_integrator = true;
+        p.pos_pid_cfg.enable_integrator = false;
         p.pos_pid_cfg.enable_derivative = false;
         // ---velocity PID: v-> a_corr ---
-        p.vel_pid_cfg.kp = Eigen::Vector3d(4.5, 4.5, 4.0);
-        p.vel_pid_cfg.ki = Eigen::Vector3d(0.8, 0.8, 0.8);
-        p.vel_pid_cfg.kd = Eigen::Vector3d(0.2, 0.2, 0.1);
+        p.vel_pid_cfg.kp = Eigen::Vector3d(4.0, 4.0, 3.0);
+        p.vel_pid_cfg.ki = Eigen::Vector3d(0.2, 0.2, 0.2);
+        p.vel_pid_cfg.kd = Eigen::Vector3d(1.2, 1.2, 0.8);
         p.vel_pid_cfg.u_min = Eigen::Vector3d(-p.a_max, -p.a_max, -p.a_max);
         p.vel_pid_cfg.u_max = Eigen::Vector3d(+p.a_max, +p.a_max, +p.a_max);
         p.vel_pid_cfg.i_min = Eigen::Vector3d(-3.0, -3.0, -3.0);
@@ -355,9 +357,9 @@ namespace gnc
         p.vel_pid_cfg.enable_integrator = true;
         p.vel_pid_cfg.enable_derivative = true;
         //---Rate PID: omega->tau ---
-        p.rate_pid_cfg.kp = Eigen::Vector3d(0.20, 0.20, 0.10);
-        p.rate_pid_cfg.ki = Eigen::Vector3d(0.02, 0.02, 0.01);
-        p.rate_pid_cfg.kd = Eigen::Vector3d(0.005, 0.005, 0.005);
+        p.rate_pid_cfg.kp = Eigen::Vector3d(0.60, 0.60, 0.30);
+        p.rate_pid_cfg.ki = Eigen::Vector3d(0.1, 0.1, 0.05);
+        p.rate_pid_cfg.kd = Eigen::Vector3d(0.02, 0.02, 0.02);
         p.rate_pid_cfg.u_min = Eigen::Vector3d(-p.tau_max.x(), -p.tau_max.y(), -p.tau_max.z());
         p.rate_pid_cfg.u_max = Eigen::Vector3d(+p.tau_max.x(), +p.tau_max.y(), +p.tau_max.z());
         p.rate_pid_cfg.i_min = Eigen::Vector3d(-2.0, -2.0, -2.0);
@@ -442,5 +444,76 @@ namespace gnc
         std::cout << "Max speed norm:          " << max_vel << " m/s\n";
         std::cout << "Final p: " << s.p_n.transpose() << "\n";
         std::cout << "Final v: " << s.v_n.transpose() << "\n";
+    }
+
+    // geometery attitude controller module
+    AttMetrics runGeomAttitudeFlipTest(
+        const char *csv_path,
+        gnc::RigidBodyState s,
+        gnc::KinematicsParams plant,
+        const gnc::GeomAttController &gc,
+        double dt, double Tsim,
+        const Eigen::Matrix3d &Rd)
+    {
+        std::ofstream ofs(csv_path);
+        ofs << "t,eR_norm,psi,omega_norm,ortho_err,det_err,tau_x,tau_y,tau_z\n";
+
+        AttMetrics m;
+        const double settle_th = 0.05;  // rad-ish:threshold on ||eR||
+        const double settle_hold = 0.5; // seconds
+        double settle_acc = 0.0;
+
+        const double T_hover = plant.mass * plant.gravity;
+
+        for (int k = 0; k < static_cast<int>(Tsim / dt); ++k)
+        {
+            const double t = k * dt;
+            const Eigen::Matrix3d R = gnc::quatToRbn(s.q_bn);
+
+            // Desired rates are zero for this experiment
+            const Eigen::Vector3d omega_d = Eigen::Vector3d::Zero();
+            const Eigen::Vector3d omega_d_dot = Eigen::Vector3d::Zero();
+
+            auto out = gc.update(R, s.omega_b, Rd, omega_d, omega_d_dot);
+
+            // Plant step
+            gnc::ControlInput u;
+            u.thrust = T_hover;
+            u.tau_b = out.tau;
+            gnc::stepKinematics(s, u, plant, dt);
+
+            // Metrics
+            const double eR_norm = out.eR.norm();
+            const double psi = out.psi;
+            const double omega_norm = s.omega_b.norm();
+
+            const double ortho = gnc::orthogonalityError(R);
+            const double dete = gnc::detError(R);
+
+            m.max_eR = std::max(m.max_eR, eR_norm);
+            m.max_psi = std::max(m.max_psi, psi);
+            m.max_omega = std::max(m.max_omega, omega_norm);
+            m.max_ortho = std::max(m.max_ortho, ortho);
+            m.max_det = std::max(m.max_det, dete);
+
+            // settling time: eR stays below threshold for settle_hold
+            if (eR_norm < settle_th)
+            {
+                settle_acc += dt;
+                if (m.settle_time < 0.0 && settle_acc >= settle_hold)
+                {
+                    m.settle_time = t - settle_hold;
+                }
+                else
+                {
+                    settle_acc = 0.0;
+                }
+                ofs << t << "," << eR_norm << "," << psi << "," << omega_norm << ","
+                    << ortho << "," << dete << ","
+                    << out.tau.x() << "," << out.tau.y() << "," << out.tau.z() << "\n";
+            }
+        }
+
+        return m;
     }
 }
